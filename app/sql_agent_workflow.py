@@ -50,6 +50,8 @@ FILTER_VALUES = {
     "migration_status": ["IDP", "Returnee", "Unknown"]
 }
 
+COLUMN_NAMES = ['loan_id', 'customer_id', 'business_id', 'disbursed_amount', 'disbursement_date', 'status', 'bank', 'region', 'sector', 'enterprise', 'loan_products', 'area_type', 'gender', 'age_group', 'vulnerable_groups', 'migration_status', 'business_establishment_year', 'business_current_no_of_employees']
+
 # Create LLM instance
 # llm = ChatOpenAI(
 #     model="gpt-3.5-turbo",
@@ -180,19 +182,24 @@ def generate_query_template(state: AgentState) -> AgentState:
     """
     
     human_prompt = f"""
-    Generate an SQL query template for this natural language query:
+    Generate an SQL query for this natural language query and make sure the SQL query is syntactically and logically correct:
     "{state['query']}"
     
-    Using these tables: {state['target_tables']}
+    Using this table: {state['target_tables']}
     
     Applying these filters: {state['filters']}
     
+    Using these columns: {COLUMN_NAMES}
+    
     Consider these guidelines:
-    1. Include appropriate JOINs between tables
-    2. Use WHERE clauses for any filters
-    3. Include GROUP BY if aggregations are needed
-    4. Use appropriate ORDER BY clauses
-    5. Use parameterized queries with placeholders like :param_name for filters
+    1. Use WHERE clauses for any filters
+    2. Include GROUP BY if aggregations are needed
+    3. Use appropriate ORDER BY clauses
+    4. For array filters, ALWAYS use the syntax: filter_column = ANY(%(filter_name)s)
+       Example: bank = ANY(%(bank)s) AND gender = ANY(%(gender)s)
+    5. For date filters, use: date_column >= %(start_date)s AND date_column <= %(end_date)s
+    6. All string comparison operators should use the exact column names
+    7. Make sure to create meaningful column aliases for aggregated values
     
     Return ONLY the SQL query template as a string, nothing else.
     """
@@ -203,20 +210,22 @@ def generate_query_template(state: AgentState) -> AgentState:
     response = llm.generate_content(combined_prompt)
     
     try:
-        query_template = response.text.strip()
-        
-        # Clean up the template if it contains markdown code blocks
-        if query_template.startswith("```sql"):
-            query_template = query_template.split("```sql")[1].split("```")[0].strip()
-        elif query_template.startswith("```"):
-            query_template = query_template.split("```")[1].split("```")[0].strip()
+        # Extract the response
+        content = response.text
+        # Clean up the response if needed
+        if "```sql" in content:
+            content = content.split("```sql")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].strip()
             
+        sql_query = content.strip()
+        
         # Update state
-        state["query_template"] = query_template
+        state["query_template"] = sql_query
         state["next_step"] = "generate_metadata"
         
     except Exception as e:
-        state["error"] = f"Error generating query template: {str(e)}"
+        state["error"] = f"Error generating SQL query: {str(e)}"
         state["next_step"] = "handle_error"
     
     return state
@@ -228,7 +237,7 @@ def generate_metadata(state: AgentState) -> AgentState:
     system_prompt = """
     You are an expert data visualization specialist.
     Your task is to determine the appropriate metadata for visualizing SQL query results.
-    Focus on creating effective visualizations based on the query structure and data types.
+    Focus on creating effective visualizations based on the query structure and data types. 
     """
     
     human_prompt = f"""
@@ -286,46 +295,26 @@ def generate_metadata(state: AgentState) -> AgentState:
 def construct_payload(state: AgentState) -> AgentState:
     """Construct the final payload for the API"""
     
+    # First, get the query details to determine the right payload structure
     system_prompt = """
-    You are an expert at constructing structured payloads for database APIs.
-    Your task is to build a complete payload for a SQL query API.
-    Ensure all required fields are included and properly formatted.
+    You are an expert at analyzing SQL queries.
+    Your task is to extract key information from a SQL query to create an appropriate visualization.
+    Focus on identifying the main metric, the appropriate grouping, and visualization type.
     """
     
     human_prompt = f"""
-    Construct a complete payload for the SQL query API with the following structure:
+    Given this natural language query: "{state['query']}"
+    And this SQL query: {state['query_template']}
     
-    {{
-      "name": "string",
-      "description": "string",
-      "query_template": "string",
-      "target_tables": ["string"],
-      "params_metadata": {{}},
-      "groupby_options": {{}},
-      "chart_type": "category",
-      "default_values": {{}},
-      "result_display_types": {{}},
-      "user_type": "string",
-      "priority": 2147483647
-    }}
+    Please provide the following information:
     
-    Use the following information:
-    - Natural language query: "{state['query']}"
-    - SQL query template: {state['query_template']}
-    - Target tables: {state['target_tables']}
-    - Filters: {state['filters']}
-    - Params metadata: {state['params_metadata']}
-    - Groupby options: {state['groupby_options']}
+    1. A concise, descriptive name for this query (e.g., "Average Loan Maturity")
+    2. A brief description explaining what this query calculates or shows (e.g., "Calculates the average loan duration (in days) for each loan product type")
+    3. The most appropriate visualization type for the result (one of: "bar", "line", "pie", "area")
+    4. The main metric column name from the SQL query (e.g., "Average_Loan_Duration")
+    5. The table being queried (e.g., "full_data_inpaymentlatest")
     
-    Guidelines:
-    1. Generate a descriptive name and explanation based on the query
-    2. Set chart_type to "category" for categorical data, "time_series" for time-based data, or null if neither applies
-    3. Include all filters in default_values
-    4. Set result_display_types based on the type of visualization (bar, pie, area, etc.)
-    5. Set user_type to "de" unless specified differently
-    6. Set priority to a reasonable integer value
-    
-    Return a complete JSON object with all required fields.
+    Return a JSON object with these properties.
     """
     
     # Combine prompts for Gemini API
@@ -342,9 +331,338 @@ def construct_payload(state: AgentState) -> AgentState:
         elif "```" in content:
             content = content.split("```")[1].strip()
             
-        payload = json.loads(content)
+        query_analysis = json.loads(content)
         
-        # Update state
+        # Extract the information
+        query_name = query_analysis.get("name", "trial 1")
+        query_description = query_analysis.get("description", "Analysis of database information")
+        visualization_type = query_analysis.get("visualization_type", "bar")
+        metric_name = query_analysis.get("main_metric", "Value")
+        table_name = query_analysis.get("table", "full_data_inpaymentlatest")
+        
+        # Create the exact payload structure that matches the working example
+        payload = {
+            "name": query_name,
+            "description": query_description,
+            "query_template": state["query_template"],
+            "target_tables": [
+                table_name
+            ],
+            "params_metadata": {
+                "group": {
+                    "groupby_fields": {
+                        "info": [
+                            "scalar",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "bank",
+                            "sector",
+                            "gender",
+                            "region",
+                            "age_range",
+                            "product_type",
+                            "education_level",
+                            "migration_status",
+                            "vulnerable_groups"
+                        ]
+                    }
+                },
+                "filter": {
+                    "bank": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Amhara",
+                            "Bunna",
+                            "Coop",
+                            "Enat",
+                            "Wegagen",
+                            "Zemzem"
+                        ]
+                    },
+                    "product_type": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "15 days loan",
+                            "30 days loan"
+                        ]
+                    },
+                    "gender": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Female",
+                            "Male",
+                            "Unknown"
+                        ]
+                    },
+                    "region": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Addis Ababa",
+                            "Afar",
+                            "Amhara",
+                            "Benishangul Gumuz",
+                            "Central Ethiopia",
+                            "Dire Dawa",
+                            "Gambela",
+                            "Harar",
+                            "Oromia",
+                            "Sidama",
+                            "SNNP",
+                            "Somali",
+                            "SWEP",
+                            "Tigray",
+                            "Unknown"
+                        ]
+                    },
+                    "sector": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Agriculture",
+                            "Building and Construction",
+                            "Domestic Trade Service",
+                            "Healthcare",
+                            "Manufacturing",
+                            "Retail",
+                            "Services",
+                            "Technology",
+                            "Other",
+                            "Unknown"
+                        ]
+                    },
+                    "age_range": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "18-24",
+                            "25-30",
+                            "31-35",
+                            "36-40",
+                            "45+"
+                        ]
+                    },
+                    "area_type": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Urban",
+                            "Pre-Urban",
+                            "Rural",
+                            "Unknown"
+                        ]
+                    },
+                    "loan_products": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "ANSL",
+                            "Derash",
+                            "Ediget",
+                            "Fetan",
+                            "Maleda",
+                            "Melegna",
+                            "Meqenet",
+                            "Meri",
+                            "Michu-Kiyya-Micro",
+                            "Michu-Kiyya-Nano",
+                            "Rai",
+                            "SAME",
+                            "SASE"
+                        ]
+                    },
+                    "migration_status": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "IDP",
+                            "Returnee",
+                            "Unknown"
+                        ]
+                    },
+                    "vulnerable_groups": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Disabled",
+                            "Women",
+                            "Youth",
+                            "Unknown"
+                        ]
+                    },
+                    "education_level": {
+                        "info": [
+                            "array",
+                            "String"
+                        ],
+                        "possible_values": [
+                            "Primary",
+                            "Diploma",
+                            "Bachelor Degree",
+                            "Masters Degree",
+                            "PhD and Above"
+                        ]
+                    },
+                    "start_date": {
+                        "info": [
+                            "scalar",
+                            "Date"
+                        ],
+                        "possible_values": []
+                    },
+                    "end_date": {
+                        "info": [
+                            "scalar",
+                            "Date"
+                        ],
+                        "possible_values": []
+                    }
+                }
+            },
+            "groupby_options": {
+                "groupby_fields": [
+                    "bank",
+                    "sector",
+                    "gender",
+                    "region",
+                    "age_range",
+                    "product_type",
+                    "education_level",
+                    "migration_status",
+                    "vulnerable_groups"
+                ]
+            },
+            "chart_type": "category",
+            "default_values": {
+                "start_date": "2020-01-01",
+                "end_date": "2030-01-01",
+                "bank": [
+                    "Amhara",
+                    "Bunna",
+                    "Coop",
+                    "Enat",
+                    "Wegagen",
+                    "Zemzem"
+                ],
+                "gender": [
+                    "Female",
+                    "Male",
+                    "Unknown"
+                ],
+                "region": [
+                    "Addis Ababa",
+                    "Afar",
+                    "Amhara",
+                    "Benishangul Gumuz",
+                    "Central Ethiopia",
+                    "Dire Dawa",
+                    "Gambela",
+                    "Harar",
+                    "Oromia",
+                    "Sidama",
+                    "SNNP",
+                    "Somali",
+                    "SWEP",
+                    "Tigray",
+                    "Unknown"
+                ],
+                "sector": [
+                    "Agriculture",
+                    "Building and Construction",
+                    "Domestic Trade Service",
+                    "Healthcare",
+                    "Manufacturing",
+                    "Retail",
+                    "Services",
+                    "Technology",
+                    "Other",
+                    "Unknown"
+                ],
+                "age_range": [
+                    "18-24",
+                    "25-30",
+                    "31-35",
+                    "36-40",
+                    "45+"
+                ],
+                "area_type": [
+                    "Urban",
+                    "Pre-Urban",
+                    "Rural",
+                    "Unknown"
+                ],
+                "product_type":[
+                    "15 days loan",
+                    "30 days loan"
+                ],
+                "loan_products": [
+                    "ANSL",
+                    "Derash",
+                    "Ediget",
+                    "Fetan",
+                    "Maleda",
+                    "Melegna",
+                    "Meqenet",
+                    "Meri",
+                    "Michu-Kiyya-Micro",
+                    "Michu-Kiyya-Nano",
+                    "Rai",
+                    "SAME",
+                    "SASE"
+                ],
+                "migration_status": [
+                    "IDP",
+                    "Returnee",
+                    "Unknown"
+                ],
+                "vulnerable_groups": [
+                    "Disabled",
+                    "Women",
+                    "Youth",
+                    "Unknown"
+                ],
+                "education_level": [
+                    "Primary",
+                    "Diploma",
+                    "Bachelor Degree",
+                    "Masters Degree",
+                    "PhD and Above"
+                ],
+                "groupby_fields": "bank"
+            },
+            "result_display_types": {
+                metric_name: "bar"
+            },
+            "dashboard_type": "cpm",
+            "user_type": "TLF_USER",
+            "priority": 1
+        }
+        
+        # Update state with the final payload
         state["payload"] = payload
         
         # Print the payload for debugging
@@ -367,34 +685,57 @@ def submit_payload(state: AgentState) -> AgentState:
         # API endpoint
         api_url = "http://54.159.60.214/api/v1/kft-visualizer/query/rawqueries/"
         
-        # Get authentication credentials from environment variables
-        api_username = os.getenv("KFT_API_USERNAME")
-        api_password = os.getenv("KFT_API_PASSWORD")
+        # Get authentication tokens from environment variables
+        bearer_token = os.getenv("KFT_BEARER_TOKEN")  # Access/Bearer token
+        refresh_token = os.getenv("KFT_REFRESH_TOKEN")  # Refresh token
         
-        # Setup headers and auth
+        logger = logging.getLogger(__name__)
+        logger.info(f"Submitting payload to {api_url}")
+        
+        # First, check if we have credentials
+        if not bearer_token:
+            print("\n⚠️ WARNING: No bearer token found!")
+            print("Set KFT_BEARER_TOKEN in your .env file.")
+            print("Attempting request without authentication, which will likely fail...\n")
+        
+        # Setup headers based on available auth method
         headers = {
             "Content-Type": "application/json"
         }
         
-        logger = logging.getLogger(__name__)
-        logger.info(f"Submitting payload to {api_url}")
-        logger.debug(f"Payload: {json.dumps(state['payload'])}")
-        
-        print("\n==== SUBMITTING PAYLOAD TO API ====")
-        print(f"URL: {api_url}")
-        print(f"Using authentication: {bool(api_username and api_password)}")
-        
-        # Execute the actual API call with authentication if credentials are provided
-        if api_username and api_password:
-            logger.info("Using authentication for API call")
+        # Add token authentication
+        if bearer_token:
+            # Token-based auth (Bearer token)
+            headers["Authorization"] = f"Bearer {bearer_token}"
+            print("\n==== SUBMITTING PAYLOAD TO API WITH BEARER TOKEN ====")
+            print(f"URL: {api_url}") 
+            logger.info("Using bearer token authentication for API call")
+            
             response = requests.post(
                 api_url, 
                 json=state["payload"], 
-                headers=headers,
-                auth=(api_username, api_password)
+                headers=headers
             )
+            
+            # Check if token expired (typically 401 response)
+            if response.status_code == 401 and refresh_token:
+                print("Bearer token appears to be expired. Attempting to refresh...")
+                
+                # Here we would normally implement token refresh logic
+                # For example:
+                # new_token = refresh_auth_token(refresh_token)
+                # if new_token:
+                #     headers["Authorization"] = f"Bearer {new_token}"
+                #     response = requests.post(api_url, json=state["payload"], headers=headers)
+                
+                # For now, we'll just simulate this with a message
+                print("⚠️ Token refresh not implemented. Please update your KFT_BEARER_TOKEN manually.")
         else:
+            # No auth as fallback
+            print("\n==== SUBMITTING PAYLOAD TO API WITHOUT AUTH ====")
+            print(f"URL: {api_url}")
             logger.warning("No API credentials found, making unauthenticated request")
+            
             response = requests.post(
                 api_url, 
                 json=state["payload"], 

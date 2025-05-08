@@ -291,6 +291,29 @@ def generate_metadata(state: AgentState) -> AgentState:
     
     return state
 
+def generate_query_name(user_query: str) -> str:
+    """Generate a descriptive name for the query based on the user query."""
+    # Create a descriptive name from the user query
+    query = user_query.strip()
+    
+    # Remove question marks and standardize the format
+    query = query.replace("?", "").strip()
+    
+    # If query starts with "what is", replace it with a more descriptive prefix
+    if query.lower().startswith("what is"):
+        query = query[8:].strip()
+        return f"Analysis of {query}"
+    elif query.lower().startswith("show me"):
+        query = query[7:].strip()
+        return f"Analysis of {query}"
+    elif query.lower().startswith("calculate"):
+        query = query[9:].strip()
+        return f"Calculation of {query}"
+    
+    # Capitalize the first letter of each word for Title Case
+    words = query.split()
+    return " ".join(words).title()
+
 # Node 5: Construct final payload
 def construct_payload(state: AgentState) -> AgentState:
     """Construct the final payload for the API"""
@@ -334,13 +357,12 @@ def construct_payload(state: AgentState) -> AgentState:
         query_analysis = json.loads(content)
         
         # Extract the information
-        query_name = query_analysis.get("name", "trial 1")
+        query_name = query_analysis.get("name") or generate_query_name(state["query"])
         query_description = query_analysis.get("description", "Analysis of database information")
         visualization_type = query_analysis.get("visualization_type", "bar")
         metric_name = query_analysis.get("main_metric", "Value")
         table_name = query_analysis.get("table", "full_data_inpaymentlatest")
         
-        # Create the exact payload structure that matches the working example
         payload = {
             "name": query_name,
             "description": query_description,

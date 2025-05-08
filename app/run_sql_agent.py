@@ -52,7 +52,7 @@ def main():
     print("========")
     
     if result.get("status") == "success":
-        print("\n✅ Query processed successfully!\n")
+        print("\n Query processed successfully!\n")
         
         payload = result.get("payload", {})
         
@@ -98,7 +98,7 @@ def main():
         print(json.dumps(payload, indent=2))
         
     else:
-        print("\n❌ Error processing query:\n")
+        print("\nError processing query:\n")
         print(f"Error: {result.get('error', 'Unknown error')}")
         
         if "diagnosis" in result:

@@ -13,7 +13,6 @@ import google.generativeai as genai
 # Load environment variables
 load_dotenv()
 
-# Define the state for our graph
 class AgentState(TypedDict):
     # Input from user
     query: str
@@ -52,61 +51,17 @@ FILTER_VALUES = {
 
 COLUMN_NAMES = ['loan_id', 'customer_id', 'business_id', 'disbursed_amount', 'disbursement_date', 'status', 'bank', 'region', 'sector', 'enterprise', 'loan_products', 'area_type', 'gender', 'age_group', 'vulnerable_groups', 'migration_status', 'business_establishment_year', 'business_current_no_of_employees']
 
-# Create LLM instance
-# llm = ChatOpenAI(
-#     model="gpt-3.5-turbo",
-#     temperature=0,
-#     api_key=os.getenv("OPENAI_API_KEY")
-# )
-
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-# Configure the Gemini client
 genai.configure(api_key=api_key)
 llm = genai.GenerativeModel('gemini-2.0-flash')
 
 # Node 1: Parse user query and identify tables
-def parse_query(state: AgentState) -> AgentState:
-    # """Extract target tables from user query"""
-    
-    # system_prompt = """
-    # You are an expert at identifying relevant database tables for SQL queries.
-    # Given a natural language query, identify which tables from the database are needed to answer it.
-    # Consider relationships between tables and the specific information requested.
-    # """
-    
-    # human_prompt = f"""
-    # Given the following database tables:
-    # - products: Information about products (id, name, category, price)
-    # - customers: Customer information (id, name, email)
-    # - orders: Order information (id, customer_id, order_date, total_amount)
-    # - order_items: Items within orders (id, order_id, product_id, quantity, unit_price)
-    
-    # Identify which tables are needed to answer this query:
-    # "{state['query']}"
-    
-    # Return ONLY a JSON list of table names, nothing else.
-    # """
-    
-    # response = llm.invoke([
-    #     {"role": "system", "content": system_prompt},
-    #     {"role": "user", "content": human_prompt}
-    # ])
-    
+def parse_query(state: AgentState) -> AgentState:   
     try:
-    #     # Extract the JSON response
-    #     content = response.content
-    #     # Clean up the response if needed
-    #     if "```json" in content:
-    #         content = content.split("```json")[1].split("```")[0].strip()
-    #     elif "```" in content:
-    #         content = content.split("```")[1].strip()
-            
-    #     target_tables = json.loads(content)
-        
-    #     # Update state
+
         state["target_tables"] = 'full_data'
         state["next_step"] = "extract_filters"
         
@@ -116,7 +71,6 @@ def parse_query(state: AgentState) -> AgentState:
     
     return state
 
-# Node 2: Extract filters from query
 def extract_filters(state: AgentState) -> AgentState:
     """Extract filter conditions from user query"""
     
@@ -751,7 +705,7 @@ def submit_payload(state: AgentState) -> AgentState:
                 #     response = requests.post(api_url, json=state["payload"], headers=headers)
                 
                 # For now, we'll just simulate this with a message
-                print("⚠️ Token refresh not implemented. Please update your KFT_BEARER_TOKEN manually.")
+                print(" Token refresh not implemented. Please update your KFT_BEARER_TOKEN manually.")
         else:
             # No auth as fallback
             print("\n==== SUBMITTING PAYLOAD TO API WITHOUT AUTH ====")

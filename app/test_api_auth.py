@@ -14,7 +14,7 @@ def test_api_auth():
     api_password = os.getenv("KFT_API_PASSWORD")
     
     if not api_username or not api_password:
-        print("❌ API credentials not found in environment variables!")
+        print("API credentials not found in environment variables!")
         print("Please set KFT_API_USERNAME and KFT_API_PASSWORD in your .env file.")
         return False
     
@@ -44,12 +44,12 @@ def test_api_auth():
             
             return True
         else:
-            print(f"❌ Authentication failed with status code: {response.status_code}")
+            print(f"Authentication failed with status code: {response.status_code}")
             print(f"Response: {response.text}")
             return False
             
     except Exception as e:
-        print(f"❌ Error testing API authentication: {str(e)}")
+        print(f"Error testing API authentication: {str(e)}")
         return False
 
 if __name__ == "__main__":
